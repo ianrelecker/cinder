@@ -8,6 +8,7 @@ from rich.theme import Theme
 import sys
 import warnings
 import subprocess
+import secrets
 
 import aiohttp_apispec
 from aiohttp_apispec import validation_middleware
@@ -35,6 +36,7 @@ from app.service.rest_svc import RestService
 from app.utility.base_object import AppConfigGlobalVariableIdentifier
 from app.utility.base_world import BaseWorld
 from app.utility.config_generator import ensure_local_config
+from app.utility.config_loader import ConfigLoader
 
 
 MAGMA_PATH = "./plugins/magma"
@@ -223,11 +225,34 @@ if __name__ == "__main__":
     elif args.environment == "local":
         ensure_local_config()
 
+    # Load configuration using the new ConfigLoader
     main_config_path = "conf/%s.yml" % args.environment
-    BaseWorld.apply_config("main", BaseWorld.strip_yml(main_config_path)[0])
+    
+    # Initialize ConfigLoader
+    config_loader = ConfigLoader(main_config_path)
+    main_config = config_loader.load()
+    
+    # Apply configurations
+    BaseWorld.apply_config("main", main_config)
     logging.info("Using main config from %s" % main_config_path)
-    BaseWorld.apply_config("agents", BaseWorld.strip_yml("conf/agents.yml")[0])
-    BaseWorld.apply_config("payloads", BaseWorld.strip_yml("conf/payloads.yml")[0])
+    
+    # Load agents and payloads configs
+    agents_loader = ConfigLoader("conf/agents.yml")
+    payloads_loader = ConfigLoader("conf/payloads.yml")
+    
+    BaseWorld.apply_config("agents", agents_loader.load())
+    BaseWorld.apply_config("payloads", payloads_loader.load())
+    
+    # Generate secure values if not set
+    if BaseWorld.get_config("encryption_key") == "ADMIN123" or not BaseWorld.get_config("encryption_key"):
+        new_key = secrets.token_hex(16)
+        BaseWorld.get_config("main")["encryption_key"] = new_key
+        logging.warning(f"[yellow]Generated random encryption key: {new_key}[/yellow]")
+        
+    if not BaseWorld.get_config("crypt_salt") or BaseWorld.get_config("crypt_salt") == "REPLACE_WITH_RANDOM_VALUE":
+        new_salt = secrets.token_hex(8)
+        BaseWorld.get_config("main")["crypt_salt"] = new_salt
+        logging.warning(f"[yellow]Generated random crypt salt: {new_salt}[/yellow]")
 
     data_svc = DataService()
     knowledge_svc = KnowledgeService()

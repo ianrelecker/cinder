@@ -47,8 +47,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    # Note: If using PostgreSQL, make sure to start the db service first
-    # by running: docker-compose --profile postgresql up -d db
+    depends_on:
+      - db
 
   # PostgreSQL database (optional, enabled when CALDERA_DB_TYPE=postgresql)
   db:

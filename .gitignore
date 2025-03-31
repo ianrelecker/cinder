@@ -1,5 +1,6 @@
 *.pyc
 *.crt
+.venv
 *.exe
 *.pyd
 *.DS_Store

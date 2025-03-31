@@ -8,7 +8,11 @@ import tarfile
 import shutil
 import warnings
 import pathlib
+import json
+import logging
 from importlib import import_module
+
+from app.utility.json_serializer import serialize_object, deserialize_object
 
 from app.objects.c_ability import Ability
 from app.objects.c_adversary import Adversary
@@ -95,26 +99,75 @@ class DataService(DataServiceInterface, BaseService):
                 DataService._delete_file(file_path)
 
     async def save_state(self):
+        """
+        Save the object database to disk using JSON serialization.
+        
+        This method prunes non-critical data and then serializes the RAM dictionary
+        to a JSON file.
+        """
         await self._prune_non_critical_data()
-        await self.get_service('file_svc').save_file('object_store', pickle.dumps(self.ram), 'data')
+        
+        try:
+            # Use JSON serialization
+            json_data = serialize_object(self.ram)
+            await self.get_service('file_svc').save_file('object_store.json', json_data.encode(), 'data')
+            self.log.debug('Saved state to object_store.json using JSON serialization')
+        except Exception as e:
+            self.log.error(f'Failed to save state using JSON: {e}')
+            # Fallback to pickle for backward compatibility
+            await self.get_service('file_svc').save_file('object_store', pickle.dumps(self.ram), 'data')
+            self.log.debug('Saved state to object_store using pickle serialization (fallback)')
 
     async def restore_state(self):
         """
-        Restore the object database
-
-        :return:
+        Restore the object database from disk.
+        
+        This method attempts to load the state from a JSON file first, and falls back
+        to pickle if the JSON file doesn't exist or can't be parsed.
+        """
+        # Try to load from JSON first
+        if os.path.exists('data/object_store.json'):
+            try:
+                _, store = await self.get_service('file_svc').read_file('object_store.json', 'data')
+                json_str = store.decode('utf-8')
+                ram = deserialize_object(json_str)
+                
+                for key in ram.keys():
+                    self.ram[key] = []
+                    for c_object in ram[key]:
+                        await self.store(c_object)
+                self.log.debug('Restored data from JSON storage')
+            except Exception as e:
+                self.log.error(f'Failed to restore state from JSON: {e}')
+                # If JSON restore fails, try pickle as fallback
+                await self._restore_from_pickle()
+        # Fall back to pickle if JSON file doesn't exist
+        elif os.path.exists('data/object_store'):
+            await self._restore_from_pickle()
+            
+        self.log.debug('There are %s jobs in the scheduler' % len(self.ram['schedules']))
+        
+    async def _restore_from_pickle(self):
+        """
+        Restore state from pickle file (legacy method).
         """
         if os.path.exists('data/object_store'):
-            _, store = await self.get_service('file_svc').read_file('object_store', 'data')
-            # Pickle is only used to load a local file that caldera creates. Pickled data is not
-            # received over the network.
-            ram = pickle.loads(store)  # nosec
-            for key in ram.keys():
-                self.ram[key] = []
-                for c_object in ram[key]:
-                    await self.store(c_object)
-            self.log.debug('Restored data from persistent storage')
-        self.log.debug('There are %s jobs in the scheduler' % len(self.ram['schedules']))
+            try:
+                _, store = await self.get_service('file_svc').read_file('object_store', 'data')
+                # Pickle is only used to load a local file that caldera creates. Pickled data is not
+                # received over the network.
+                ram = pickle.loads(store)  # nosec
+                for key in ram.keys():
+                    self.ram[key] = []
+                    for c_object in ram[key]:
+                        await self.store(c_object)
+                self.log.debug('Restored data from pickle storage')
+                
+                # Migrate to JSON format
+                self.log.info('Migrating data from pickle to JSON format')
+                await self.save_state()
+            except Exception as e:
+                self.log.error(f'Failed to restore state from pickle: {e}')
 
     async def apply(self, collection):
         if collection not in self.ram:
